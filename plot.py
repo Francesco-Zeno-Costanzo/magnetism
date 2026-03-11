@@ -198,9 +198,9 @@ def main():
         prog="plot_spins",
         description="Visualize spin configurations from CSV files.\n"
                     "Example usage:\n"
-                    "  python plot_spins.py -n 32 -m 2d\n"
-                    "  python plot_spins.py -n 16 -m 3d\n"
-                    "  python plot_spins.py -n 32 -c",
+                    "  python plot_spins.py -d run0 -n 32 -m 2d\n"
+                    "  python plot_spins.py -d run0 -n 16 -m 3d\n"
+                    "  python plot_spins.py -d run0 -n 32 -c -e ene.csv",
         formatter_class=argparse.RawTextHelpFormatter
     )
 
