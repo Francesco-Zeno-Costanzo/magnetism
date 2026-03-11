@@ -9,12 +9,14 @@ import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 
 
-def load_data(N):
+def load_data(path, N):
     '''
-    Load CSV spin snapshots from ./img directory
+    Load CSV spin snapshots from path directory
 
     Parameters
     ----------
+    path : str
+        Directory containing the CSV files
     N : int
         Size of the lattice
     
@@ -23,9 +25,9 @@ def load_data(N):
     data : list
         List of all configurations
     '''
-    files = sorted(glob.glob('img/spins_step*.csv'))
+    files = sorted(glob.glob(f'{path}/spins_step*.csv'))
     if not files:
-        raise FileNotFoundError("No CSV files found in ./img/")
+        raise FileNotFoundError(f"No CSV files found in {path}/")
     
     data = []
 
@@ -166,6 +168,29 @@ def compare_frames(data, N):
     plt.tight_layout()
     plt.show()
 
+def plot_energy(path, energy_file):
+    '''
+    Function to plot energy vs time from a CSV file
+
+    Parameters
+    ----------
+    path : str
+        Directory containing the energy CSV file
+    energy_file : str
+        Path to the energy CSV file
+    '''
+    try:
+        energy_data = np.loadtxt(f'{path}/{energy_file}', delimiter=',')
+        plt.figure(figsize=(8, 5))
+        plt.plot(energy_data[:, 0], energy_data[:, 1], marker='.')
+        plt.title("Energy vs Time")
+        plt.xlabel("Time")
+        plt.ylabel("Energy")
+        plt.grid()
+        plt.show()
+    except FileNotFoundError:
+        print(f"Energy file '{energy_file}' not found.")
+
 
 def main():
 
@@ -179,6 +204,9 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter
     )
 
+    parser.add_argument("-d", "--directory", type=str, default="run0",
+                        help="Directory containing spin CSV files (default: run0)")
+
     parser.add_argument("-n", "--N", type=int, default=16,
                         help="Grid size (default: 16)")
     
@@ -190,10 +218,13 @@ def main():
     
     parser.add_argument("-c", "--compare", action="store_true",
                         help="Show comparison of first and last frames (2D only)")
+    
+    parser.add_argument("-e", "--energy", type=str, default="run0/ene.csv",
+                        help="Plot energy vs time")
 
     args = parser.parse_args()
 
-    data_list = load_data(args.N)
+    data_list = load_data(args.directory, args.N)
 
     if args.mode == "2d":
         plot_2d(data_list, args.N, save=args.save)
@@ -202,7 +233,9 @@ def main():
     
     if args.compare:
         compare_frames(data_list, args.N)
-
+    if args.energy:
+        plot_energy(args.directory, args.energy)
+        
 
 if __name__ == "__main__":
     main()
