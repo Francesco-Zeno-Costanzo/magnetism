@@ -190,6 +190,56 @@ def plot_energy(path, energy_file):
         plt.show()
     except FileNotFoundError:
         print(f"Energy file '{energy_file}' not found.")
+    
+def plot_hysteresis(path, hysteresis_file):
+    '''
+    Function to plot hysteresis loop from a CSV file
+
+    Parameters
+    ----------
+    path : str
+        Directory containing the hysteresis CSV file
+    hysteresis_file : str
+        Path to the hysteresis CSV file
+    '''
+    try:
+        H, Mx, My, Mz, _ = np.loadtxt(f'{path}/{hysteresis_file}', delimiter=',', unpack=True)
+        nx, ny, nz       = Mx[0], My[0], Mz[0]
+        H, Mx, My, Mz    = H[1:], Mx[1:], My[1:], Mz[1:]
+
+        plt.figure(figsize=(12, 8))
+        plt.subplot(2, 2, 1)
+        plt.plot(H, Mx, marker='.')
+        plt.title("Hysteresis Loop - Mx vs H")
+        plt.xlabel("External Field")
+        plt.ylabel("Magnetization")
+        plt.grid()
+
+        plt.subplot(2, 2, 2)
+        plt.plot(H, My, marker='.')
+        plt.title("Hysteresis Loop - My vs H")
+        plt.xlabel("External Field")
+        plt.ylabel("Magnetization")
+        plt.grid()
+
+        plt.subplot(2, 2, 3)
+        plt.plot(H, Mz, marker='.')
+        plt.title("Hysteresis Loop - Mz vs H")
+        plt.xlabel("External Field")
+        plt.ylabel("Magnetization")
+        plt.grid()
+
+        plt.subplot(2, 2, 4)
+        plt.plot(H, (Mx*nx + My*ny + Mz*nz)/np.sqrt(nx**2 + ny**2 + nz**2), marker='.')
+        plt.title("Total hysteresis Loop")
+        plt.xlabel("External Field")
+        plt.ylabel("Magnetization")
+        plt.grid()
+
+        plt.tight_layout()
+        plt.show()
+    except Exception as e: #FileNotFoundError:
+        print(f"Hysteresis file '{e}' not found.")
 
 
 def main():
@@ -207,8 +257,8 @@ def main():
     parser.add_argument("-d", "--directory", type=str, default="run0",
                         help="Directory containing spin CSV files (default: run0)")
 
-    parser.add_argument("-n", "--N", type=int, default=16,
-                        help="Grid size (default: 16)")
+    parser.add_argument("-n", "--N", type=int, default=None,
+                        help="Grid size (default: None)")
     
     parser.add_argument("-m", "--mode", choices=["2d", "3d"], default="none",
                         help="Visualization mode: 2d or 3d")
@@ -219,22 +269,30 @@ def main():
     parser.add_argument("-c", "--compare", action="store_true",
                         help="Show comparison of first and last frames (2D only)")
     
-    parser.add_argument("-e", "--energy", type=str, default="run0/ene.csv",
+    parser.add_argument("-e", "--energy", type=str, default=None,
                         help="Plot energy vs time")
+
+    parser.add_argument("-hist", "--hysteresis", type=str, default=None,
+                        help="Plot hysteresis loop from CSV file")
 
     args = parser.parse_args()
 
-    data_list = load_data(args.directory, args.N)
+    if args.N is not None:
 
-    if args.mode == "2d":
-        plot_2d(data_list, args.N, save=args.save)
-    elif args.mode == "3d":
-        plot_3d(data_list, args.N, save=args.save)
-    
-    if args.compare:
-        compare_frames(data_list, args.N)
+        data_list = load_data(args.directory, args.N)
+
+        if args.mode == "2d":
+            plot_2d(data_list, args.N, save=args.save)
+        elif args.mode == "3d":
+            plot_3d(data_list, args.N, save=args.save)
+        
+        if args.compare:
+            compare_frames(data_list, args.N)
+
     if args.energy:
         plot_energy(args.directory, args.energy)
+    if args.hysteresis:
+        plot_hysteresis(args.directory, args.hysteresis)
         
 
 if __name__ == "__main__":

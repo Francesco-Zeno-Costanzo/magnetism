@@ -82,6 +82,13 @@ typedef struct{
     double dt;            // Time step (arbitrary units)
     double Hx, Hy, Hz;    // External field components
     double kx, ky, kz;    // Anisotropy directions
+    double Hmax;          // Maximum field for hysteresis loop
+    double Hmin;          // Minimum field for hysteresis loop
+    double dH;            // Field increment for hysteresis loop
+    double hx, hy, hz;    // Direction of the applied field for hysteresis loop
+    double relax_tol;     // Tolerance for relaxation in hysteresis loop
+    int max_steps;        // Maximum steps for relaxation in hysteresis loop
+    int save_states;      // Flag to save states during hysteresis loop (1 to save, 0 to skip)
 } Params;
 
 /****************************/
@@ -103,21 +110,30 @@ typedef struct{
 
 void default_params(Params *p)
 {
-    p->N          = 64;
-    p->nsteps     = 10000;
-    p->save_every = 50;
-    p->J          = 1.0;
-    p->gamma      = 1.76;
-    p->alpha      = 0.1;
-    p->K_u        = 1.0;
-    p->D          = 1.0;
-    p->dt         = 0.005;
-    p->Hx         = 0.0;
-    p->Hy         = 0.0;
-    p->Hz         = 0.25;
-    p->kx         = 0.0;
-    p->ky         = 1.0;
-    p->kz         = 0.0;
+    p->N             = 64;
+    p->nsteps        = 10000;
+    p->save_every    = 50;
+    p->J             = 1.0;
+    p->gamma         = 1.76;
+    p->alpha         = 0.1;
+    p->K_u           = 1.0;
+    p->D             = 1.0;
+    p->dt            = 0.005;
+    p->Hx            = 0.0;
+    p->Hy            = 0.0;
+    p->Hz            = 0.0;
+    p->kx            = 0.0;
+    p->ky            = 0.0;
+    p->kz            = 0.0;
+    p->Hmax          = 1.0;
+    p->Hmin          = -1.0;
+    p->dH            = 0.1;
+    p->hx            = 0.0;
+    p->hy            = 0.0;
+    p->hz            = 0.0;
+    p->relax_tol     = 1e-6;
+    p->max_steps     = 40000;
+    p->save_states   = 1;
 }
 
 /*===========================================================*/
@@ -226,11 +242,12 @@ void save_snapshot(SimulationState *state, int step, const char *outdir){
     fclose(f);
 }
 
-void save_params(const Params *p, const char *mode, const char *outdir){
+void save_params(const Params *p, const char *sim, const char *mode, const char *outdir){
     /*
     Function to save the simulation parameters to a text file for record keeping
     Parameters:
         p: pointer to Params structure containing simulation parameters
+        sim : const char *, simulation type (e.g. "single", "hysteresis")
         mode: const char *, initial configuration mode
         outdir: const char *, output directory path
     */
@@ -245,6 +262,8 @@ void save_params(const Params *p, const char *mode, const char *outdir){
 
     fprintf(f, "Simulation parameters\n");
     fprintf(f, "---------------------\n");
+
+    fprintf(f,"simulation_type %s\n", sim);
 
     fprintf(f, "N          %d\n", p->N);
     fprintf(f, "nsteps     %d\n", p->nsteps);
@@ -278,12 +297,35 @@ void save_params(const Params *p, const char *mode, const char *outdir){
 
     fprintf(f, "mode %s\n", mode);
 
+  
+    fprintf(f,"\nHysteresis parameters\n");
+
+    fprintf(f,"Hmax %.6f\n", p->Hmax);
+    fprintf(f,"Hmin %.6f\n", p->Hmin);
+    fprintf(f,"dH   %.6f\n", p->dH);
+
+    fprintf(f,"\nField direction\n");
+
+    fprintf(f,"hx_dir %.6f\n", p->hx);
+    fprintf(f,"hy_dir %.6f\n", p->hy);
+    fprintf(f,"hz_dir %.6f\n", p->hz);
+
+    fprintf(f,"\nRelaxation\n");
+
+    fprintf(f,"relax_tol   %.6e\n", p->relax_tol);
+    fprintf(f,"relax_steps %d\n",   p->max_steps);
+
+    fprintf(f,"\nSave states %d\n", p->save_states);
+
     fclose(f);
 }
 
 void print_help(Params *p){
     /* Help message */
     printf("Options:\n");
+
+    printf(" -h  show this help message\n");
+    printf(" -S  choice if single run or hysteresis loop (default single)\n");
 
     printf(" -N  grid size (default %d)\n", p->N);
     printf(" -t  number of time steps (default %d)\n", p->nsteps);
@@ -314,6 +356,21 @@ void print_help(Params *p){
 
     printf(" -o  output directory for saving snapshots.csv (default run0) \n");
     printf(" -e  energy file will be inside the output directory (default ene.csv) \n");
+
+    printf("\nHysteresis loop parameters (only if -S hysteresis)\n");
+
+    printf(" -H  maximum field (default %f)\n", p->Hmax);
+    printf(" -a  minimum field (default %f)\n", p->Hmin);
+    printf(" -b  field step dH (default %f)\n", p->dH);
+
+    printf(" -i  field direction hx (default %f)\n", p->hx);
+    printf(" -j  field direction hy (default %f)\n", p->hy);
+    printf(" -k  field direction hz (default %f)\n", p->hz);
+
+    printf(" -r  relaxation tolerance (default %e)\n", p->relax_tol);
+    printf(" -R  relaxation max steps (default %d)\n", p->max_steps);
+
+    printf(" -w  save final states (0/1)\n");
 
     printf("\nExample:\n");
 
@@ -465,32 +522,6 @@ void llg_rhs(SimulationState *state, const vec3 *mi, const vec3 *h, vec3 *rhs){
     vec3 term   = add(mxh, scale(mxmxh, p->alpha));
 
     *rhs        = scale(term, pref);
-}
-
-vec3 rodrigues_rotation(vec3 m, vec3 ang_vel, double dt){
-    /*
-    Function to perform a rotation of the spin m around the axis defined
-    by the angular velocity vector ang_vel using Rodrigues' rotation formula.
-
-    Parameters:
-        m: vec3 structure, the spin to rotate
-        ang_vel: vec3 structure, the angular velocity vector (axis and speed)
-        dt: double, time step for the rotation
-    
-    Returns:
-        m_new: vec3 structure, the rotated spin
-    */
-    double w = sqrt(dot(ang_vel, ang_vel));
-    if(w < 1e-12) return m;
-
-    vec3 k = scale(ang_vel, 1.0/w);
-    double theta = w * dt;
-
-    vec3 term1 = scale(m, cos(theta));
-    vec3 term2 = scale(cross(k,m), sin(theta));
-    vec3 term3 = scale(k, dot(k,m)*(1-cos(theta)));
-
-    return add(term1, add(term2, term3));
 }
 
 void llg_step_heun(SimulationState *state){
@@ -652,8 +683,16 @@ void init(SimulationState *state, const char *mode){
     }
 }
 
-double compute_energy(SimulationState *state)
-{
+double compute_energy(SimulationState *state){
+    /*
+    Function to compute the total energy of the system based on the current spin configuration
+
+    Parameters:
+        state: pointer to SimulationState structure containing current spins and parameters
+    
+    Returns:
+        E: double representing the total energy of the system
+    */
     int N = state->N;
     vec3 *m = state->m;
     const Params *p = state->params;
@@ -691,73 +730,67 @@ double compute_energy(SimulationState *state)
     return E;
 }
 
-/*===========================================================*/
-/* Main                                                      */
-/*===========================================================*/
-
-int main(int argc, char *argv[]){
-
+void compute_mag(SimulationState *state, double *Mx, double *My, double *Mz){
+    /*
+    Function to compute the average magnetization components of the system
+    Parameters:
+        state: pointer to SimulationState structure containing current spins and parameters
+        Mx, My, Mz: pointers to double where the average magnetization components will be stored
+    */
     
-    Params params;
-    default_params(&params);
+    int N     = state->params->N;
+    vec3 *m   = state->m;
+    
+    double sx = 0.0;
+    double sy = 0.0;
+    double sz = 0.0;
 
-    char mode[64]         = "random";
-    char outdir[256]      = "run0";
-    char energy_file[256] = "ene.csv";
-    char path[512];
-
-    int opt;
-
-    while((opt = getopt(argc, argv, "N:t:s:J:D:K:d:x:y:z:X:Y:Z:m:o:e:h")) != -1){
-        switch(opt){
-            case 'N': params.N          = atoi(optarg); break;
-            case 't': params.nsteps     = atoi(optarg); break;
-            case 's': params.save_every = atoi(optarg); break;
-            case 'J': params.J          = atof(optarg); break;
-            case 'D': params.D          = atof(optarg); break;
-            case 'K': params.K_u        = atof(optarg); break;
-            case 'd': params.dt         = atof(optarg); break;
-            case 'x': params.Hx         = atof(optarg); break;
-            case 'y': params.Hy         = atof(optarg); break;
-            case 'z': params.Hz         = atof(optarg); break;
-            case 'X': params.kx         = atof(optarg); break;
-            case 'Y': params.ky         = atof(optarg); break;
-            case 'Z': params.kz         = atof(optarg); break;
-
-            case 'm': strncpy(mode,optarg,63); break;
-            case 'o': strncpy(outdir,optarg,255); break;
-            case 'e': strncpy(energy_file,optarg,255); break;
-            case 'h':
-                printf("Usage: ./llg [options]\n");
-                print_help(&params);
-                exit(EXIT_FAILURE);
-
-            default:
-                printf("Usage: ./llg [options]\n");
-                print_help(&params);
-                exit(EXIT_FAILURE);
-        }
+    for(int i = 0; i < N*N; i++){
+        sx += m[i].x;
+        sy += m[i].y;
+        sz += m[i].z;
     }
 
+    *Mx = sx/(N*N*1.0);
+    *My = sy/(N*N*1.0);
+    *Mz = sz/(N*N*1.0);
+
+}
+
+/*===========================================================*/
+/* Functions to run simulations and store data               */
+/*===========================================================*/
+
+void run_simulation(const Params *p, const char *mode, const char *outdir, const char *energy_file){
+    /*
+    Function to run the LLG simulation with given parameters and initial mode
+    Parameters:
+        p: pointer to Params structure containing simulation parameters
+        mode: const char *, initial configuration mode
+        outdir: const char *, output directory path for saving results
+        energy_file: const char *, name of the file to save energy values
+    */
+
+    char path[512];
     mkdir(outdir, 0777);
-    save_params(&params, mode, outdir);
+    save_params(p, "single", mode, outdir);
 
     snprintf(path, sizeof(path), "%s/%s", outdir, energy_file);
     FILE *energy = fopen(path, "w");
     if(!energy){
         printf("Cannot open energy file\n");
-        return 1;
+        exit(EXIT_FAILURE);
     }
 
-    SimulationState *state = sim_state_alloc(&params);
-    if (!state) return 1;
+    SimulationState *state = sim_state_alloc(p);
+    if (!state) exit(EXIT_FAILURE);
     
     init(state, mode);
 
-    for(int step=0; step<=params.nsteps; step++){
+    for(int step=0; step<=p->nsteps; step++){
         llg_step_heun(state);
 
-        if(step % params.save_every == 0){
+        if(step % p->save_every == 0){
             save_snapshot(state, step, outdir);
             // compute and save on file energy for monitoring
             double E = compute_energy(state);
@@ -766,7 +799,7 @@ int main(int argc, char *argv[]){
         }
 
         int barWidth    = 40;
-        double progress = (double)step / params.nsteps;
+        double progress = (double)step / p->nsteps;
         printf("\r[");
 
         int pos = barWidth * progress;
@@ -783,5 +816,210 @@ int main(int argc, char *argv[]){
     fclose(energy);
     state_free(state);
 
+}
+
+
+void relax_system(SimulationState *state, double tol, int max_steps){
+    /*
+    Function to relax the system to a local energy minimum using the 
+    LLG dynamics until the energy change is below a specified tolerance
+    or a maximum number of steps is reached
+
+    Parameters:
+        state: pointer to SimulationState structure containing current spins and parameters
+        tol: double, energy change tolerance for convergence
+        max_steps: int, maximum number of steps to perform for relaxation
+    */
+    double E_old = compute_energy(state);
+    double E_new = E_old;
+
+    for(int step = 0; step < max_steps; step++){
+        llg_step_heun(state);
+        E_new = compute_energy(state);
+
+        if(fabs(E_new - E_old) < tol){
+            break;
+        }
+
+        E_old = E_new;
+    }
+}
+
+void run_hysteresis(SimulationState *state, Params *p, const char *outdir){
+    /*
+    Function to run a hysteresis loop simulation by sweeping the external field
+    from Hmax to Hmin and back, relaxing the system at each field step,
+    and recording the magnetization and energy
+
+    Parameters:
+        state: pointer to SimulationState structure containing current spins and parameters
+        p: pointer to Params structure containing simulation parameters (including field sweep parameters)
+        outdir: const char *, output directory path for saving results
+    */
+    char fname[256];
+    mkdir(outdir, 0777);
+    sprintf(fname,"%s/hysteresis.csv",outdir);
+    printf("Saving hysteresis loop to %s\n", fname);
+    save_params(p, "hysteresis", "random", outdir);
+
+
+    FILE *f = fopen(fname,"w");
+    if(!f){
+        printf("Cannot open hysteresis file\n");
+        return;
+    }
+
+    double nx = p->hx;
+    double ny = p->hy;
+    double nz = p->hz;
+
+    /* For plot simplicity */
+    fprintf(f,"%d,%f,%f,%f,%d\n", 0, nx, ny, nz, 0);
+
+    double n = sqrt(nx*nx + ny*ny + nz*nz);
+
+    if(n == 0){
+        printf("Invalid hysteresis direction\n");
+        exit(1);
+    }
+
+    nx/=n;
+    ny/=n;
+    nz/=n;
+
+    int step_id = 0;
+    double Mx, My, Mz;
+
+    /* Sweep up branch */
+    for(double H = p->Hmax; H >= p->Hmin-p->dH; H -= p->dH){
+        
+        p->Hx = H * nx;
+        p->Hy = H * ny;
+        p->Hz = H * nz;
+
+        printf("Field H = %.4f\n",H);
+
+        relax_system(state, p->relax_tol, p->max_steps);
+
+        compute_mag(state, &Mx, &My, &Mz);
+
+        double E = compute_energy(state);
+
+        fprintf(f,"%f,%f,%f,%f,%f\n",H,Mx,My,Mz,E);
+
+        if(p->save_states){
+            save_snapshot(state, step_id, outdir);
+        }
+
+        step_id++;
+    }
+
+    /* Sweep down branch */
+    for(double H = p->Hmin; H <= p->Hmax+p->dH; H += p->dH){
+        
+        p->Hx = H * nx;
+        p->Hy = H * ny;
+        p->Hz = H * nz;
+
+        printf("Field H = %.4f\n",H);
+
+        relax_system(state, p->relax_tol, p->max_steps);
+
+        compute_mag(state, &Mx, &My, &Mz);
+
+        double E = compute_energy(state);
+
+        fprintf(f,"%f,%f,%f,%f,%f\n",H,Mx,My,Mz,E);
+
+        if(p->save_states){
+            save_snapshot(state, step_id, outdir);
+        }
+
+        step_id++;
+    }
+
+    fclose(f);
+}
+
+/*===========================================================*/
+/* Main                                                      */
+/*===========================================================*/
+
+int main(int argc, char *argv[]){
+
+    Params params;
+    default_params(&params);
+
+    char sim[64]          = "single_run";
+    char init_mode[64]    = "random";
+    char outdir[256]      = "run0";
+    char energy_file[256] = "ene.csv";
+    
+
+    int opt;
+
+    while((opt = getopt(argc, argv, "S:N:t:s:J:D:K:d:x:y:z:X:Y:Z:m:o:e:H:a:b:i:j:k:r:R:w:h")) != -1){
+        switch(opt){
+            
+            /*Type of simulation*/
+            case 'S': strncpy(sim, optarg, 63); break;
+
+            /* Simulation parameters */
+            case 'N': params.N           = atoi(optarg); break;
+            case 't': params.nsteps      = atoi(optarg); break;
+            case 's': params.save_every  = atoi(optarg); break;
+            case 'J': params.J           = atof(optarg); break;
+            case 'D': params.D           = atof(optarg); break;
+            case 'K': params.K_u         = atof(optarg); break;
+            case 'd': params.dt          = atof(optarg); break;
+            case 'x': params.Hx          = atof(optarg); break;
+            case 'y': params.Hy          = atof(optarg); break;
+            case 'z': params.Hz          = atof(optarg); break;
+            case 'X': params.kx          = atof(optarg); break;
+            case 'Y': params.ky          = atof(optarg); break;
+            case 'Z': params.kz          = atof(optarg); break;
+            case 'H': params.Hmax        = atof(optarg); break;
+            case 'a': params.Hmin        = atof(optarg); break;
+            case 'b': params.dH          = atof(optarg); break;
+            case 'i': params.hx          = atof(optarg); break;
+            case 'j': params.hy          = atof(optarg); break;
+            case 'k': params.hz          = atof(optarg); break;
+            case 'r': params.relax_tol   = atof(optarg); break;
+            case 'R': params.max_steps   = atoi(optarg); break;
+            case 'w': params.save_states = atoi(optarg); break;
+
+            /* Simulation options */
+            case 'm': strncpy(init_mode,  optarg, 63); break;
+            case 'o': strncpy(outdir,     optarg,255); break;
+            case 'e': strncpy(energy_file,optarg,255); break;
+            case 'h':
+                printf("Usage: ./llg [options]\n");
+                print_help(&params);
+                exit(EXIT_FAILURE);
+
+            default:
+                printf("Usage: ./llg [options]\n");
+                print_help(&params);
+                exit(EXIT_FAILURE);
+        }
+    }
+
+    if (strcmp(sim, "single_run") == 0){
+        run_simulation(&params, init_mode, outdir, energy_file);
+    } 
+    else if (strcmp(sim, "hysteresis") == 0){
+        SimulationState *state = sim_state_alloc(&params);
+        if (!state) exit(EXIT_FAILURE);
+
+        init(state, init_mode);
+        run_hysteresis(state, &params, outdir);
+
+        state_free(state);
+    }
+    else{
+        fprintf(stderr, "Unknown simulation type '%s'.\n", sim);
+        exit(EXIT_FAILURE);
+    }
+    
     return 0;
 }
