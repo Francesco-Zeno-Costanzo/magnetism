@@ -13,7 +13,7 @@ The total energy functional used in this code is:
 
 E = ∫ [ 
         J |∇m|^2
-      + D ( m_z (∇·m) − (m · ∇) m_z )
+      + D ( m · (∇ x m) )
       − K_u (m · k)^2
       − H_ext · m
     ] dA
@@ -23,7 +23,7 @@ Terms:
 1) Exchange interaction:
     E_ex = J |∇m|^2
 2) Interfacial Dzyaloshinskii–Moriya interaction (DMI):
-    E_DMI = D [ m_z (∇·m) − (m · ∇) m_z ]
+    E_DMI = D [ m · (∇ x m) ]
 3) Uniaxial anisotropy:
     E_anis = −K_u (m · k)^2
 4) Zeeman interaction with external field:
@@ -352,7 +352,7 @@ void print_help(Params *p){
 
     printf("\nSimulation\n");
 
-    printf(" -m  initial condition (random, uniform, vortex...)\n");
+    printf(" -m  initial condition (random [default], uniform, vortex...)\n");
 
     printf(" -o  output directory for saving snapshots.csv (default run0) \n");
     printf(" -e  energy file will be inside the output directory (default ene.csv) \n");
@@ -370,11 +370,14 @@ void print_help(Params *p){
     printf(" -r  relaxation tolerance (default %e)\n", p->relax_tol);
     printf(" -R  relaxation max steps (default %d)\n", p->max_steps);
 
-    printf(" -w  save final states (0/1)\n");
+    printf(" -w  if 1 save final states at each field value (0/1)\n");
 
-    printf("\nExample:\n");
+    printf("\nExamples:\n");
 
-    printf("./llg -N 128 -J 1 -D 1 -z 0.3 -m random -o run1\n\n");
+    printf("Simple simulation             : ./llg -N 128 -J 1 -D 1 -z 0.3 -m random -o run -e ene.csv \n\n");
+    printf("Hysteresis loop hard direction: ./llg -S hysteresis -N 64 -H 1 -a -1 -b 0.1 -i 1 -X 0.1 -Y 0.9 -o run1\n");
+    printf("Hysteresis loop easy direction: ./llg -S hysteresis -N 64 -H 1 -a -1 -b 0.1 -i 1 -X 0.9 -Y 0.1 -o run1\n");
+
 }
 
 /*===========================================================*/
@@ -484,9 +487,10 @@ void effective_field(SimulationState *state, vec3 *m_arr, vec3 *Hout){
             // DMI interaction
             vec3 H_dmi = {0.0, 0.0, 0.0};
 
-            H_dmi.x = -p->D * (m_jp.z - m_jm.z)/2.0;
-            H_dmi.y =  p->D * (m_ip.z - m_im.z)/2.0;
-            H_dmi.z =  p->D * ((m_jp.x - m_jm.x) - (m_ip.y - m_im.y))/2.0;
+            H_dmi.x = p->D * -(m_jp.z - m_jm.z)/2.0;
+            H_dmi.y = p->D *  (m_ip.z - m_im.z)/2.0;
+            H_dmi.z = p->D *  ((m_jp.x - m_jm.x) - (m_ip.y - m_im.y))/2.0;
+
 
             // anisotropy term
             vec3 m      = m_arr[id];
@@ -706,20 +710,34 @@ double compute_energy(SimulationState *state){
 
             int ip = (i+1)%N;
             int jp = (j+1)%N;
+            int im = (i-1+N)%N;
+            int jm = (j-1+N)%N;
 
             vec3 m0 = m[id];
-            vec3 mx = m[idx(ip,j,N)];
-            vec3 my = m[idx(i,jp,N)];
+
+            vec3 m_ip = m[idx(ip, j, N)];
+            vec3 m_im = m[idx(im, j, N)];
+            vec3 m_jp = m[idx(i, jp, N)];
+            vec3 m_jm = m[idx(i, jm, N)];
+
 
             /* exchange */
-            vec3 dx = add(mx, scale(m0,-1));
-            vec3 dy = add(my, scale(m0,-1));
+            vec3 dx = add(m_ip, scale(m0,-1));
+            vec3 dy = add(m_jp, scale(m0,-1));
 
             E += p->J * (dot(dx,dx) + dot(dy,dy));
 
             /* anisotropy */
             double proj = dot(m0, state->K_u_dir);
             E += -p->K_u * proj * proj;
+
+            /* DMI */
+            double dmy_dx = (m_ip.y - m_im.y) / 2.0;
+            double dmx_dy = (m_jp.x - m_jm.x) / 2.0;
+            double dmz_dx = (m_ip.z - m_im.z) / 2.0;
+            double dmz_dy = (m_jp.z - m_jm.z) / 2.0;
+
+            E += p->D * (m0.z * (dmy_dx - dmx_dy) + m0.x * dmz_dy - m0.y * dmz_dx);
 
             /* zeeman */
             vec3 H = {p->Hx,p->Hy,p->Hz};
